@@ -1,0 +1,9 @@
+# Python >= 3.10. Install with:  pip install -r requirements.txt
+numpy>=1.24
+matplotlib>=3.7
+pyserial>=3.5
+PyYAML>=6.0
+# The live display needs a GUI backend for matplotlib. Tk usually comes with
+# Python (Windows/macOS; on Linux: python3-tk / tk package). If Tk is missing,
+# install Qt instead:
+PyQt6>=6.5 ; platform_system == "Linux"

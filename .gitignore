@@ -2,5 +2,11 @@
 __pycache__/
 *.pyc
 firmware/*/build/
-recordings/*
-!recordings/.gitkeep
+legacy/csi_rx/build/
+# Recorded data stays on the laptop (can be large); keep the folder structure
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+legacy/recordings/*
+!legacy/recordings/.gitkeep

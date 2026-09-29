@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wi-Fi Sensing Heatmap</title>
+<style>
+  body { margin: 0; background: #111; color: #ddd; font: 15px system-ui, sans-serif;
+         display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
+  #status { font-size: 22px; font-weight: 600; }
+  #links { color: #999; font-size: 13px; }
+  canvas { width: min(90vw, 600px); background: #000; border: 1px solid #333; }
+</style>
+</head>
+<body>
+<div id="status">Connecting...</div>
+<canvas id="map"></canvas>
+<div id="links"></div>
+<script>
+const STATES = { moving: 'Movement', still_breathing: 'Someone still (breathing)', maybe: 'Maybe someone',
+                 empty: 'Nobody', warming: 'Starting up...', nodata: 'No data from receivers',
+                 calib_countdown: 'Calibrating soon...', calibrating: 'Calibrating...' };
+const canvas = document.getElementById('map'), ctx = canvas.getContext('2d');
+const PX = 60;                              // pixels per metre
+const off = document.createElement('canvas'), octx = off.getContext('2d');
+
+// 0..1 -> black, blue, red, yellow
+function color(v) {
+  const stops = [[0, 0, 0], [30, 60, 200], [230, 40, 30], [255, 230, 60]];
+  const f = Math.min(Math.max(v, 0), 1) * 3, i = Math.min(Math.floor(f), 2), t = f - i;
+  return stops[i].map((c, k) => c + (stops[i + 1][k] - c) * t);
+}
+
+function draw(d) {
+  const h = d.heatmap;
+  if (!h) return;
+  const W = h.nx * h.cell * PX, H = h.ny * h.cell * PX;
+  if (canvas.width !== W) { canvas.width = W; canvas.height = H; off.width = h.nx; off.height = h.ny; }
+  const img = octx.createImageData(h.nx, h.ny);
+  h.values.forEach((v, i) => {
+    const [r, g, b] = color(v);
+    // row 0 = smallest y (the sender) is drawn at the bottom
+    const x = i % h.nx, y = h.ny - 1 - Math.floor(i / h.nx), j = (y * h.nx + x) * 4;
+    img.data.set([r, g, b, 255], j);
+  });
+  octx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(off, 0, 0, W, H);
+
+  const px = (x, y) => [(x - h.x0) * PX, H - (y - h.y0) * PX];
+  const tx = d.layout.tx;
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  for (const r of d.layout.receivers) {
+    ctx.beginPath(); ctx.moveTo(...px(tx.x, tx.y)); ctx.lineTo(...px(r.x, r.y)); ctx.stroke();
+  }
+  ctx.font = '13px system-ui'; ctx.textAlign = 'center';
+  for (const b of [tx, ...d.layout.receivers]) {
+    const [x, y] = px(b.x, b.y);
+    ctx.fillStyle = '#fff'; ctx.fillRect(x - 5, y - 5, 10, 10);
+    ctx.fillText(b.name, x, y - 10);
+  }
+}
+
+const es = new EventSource('/stream');
+es.onmessage = e => {
+  const d = JSON.parse(e.data);
+  document.getElementById('status').textContent = d.error ? `Error: ${d.error}` : (STATES[d.state] || d.state);
+  document.getElementById('links').textContent =
+    (d.links || []).map(l => `${l.name}: ${l.rate} pkt/s, activity ${d.heatmap?.activity?.[l.name] ?? '-'}`).join('   ·   ');
+  draw(d);
+};
+es.onerror = () => document.getElementById('status').textContent = 'Disconnected (is server.py running?)';
+</script>
+</body>
+</html>

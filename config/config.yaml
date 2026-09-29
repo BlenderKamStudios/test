@@ -1,0 +1,132 @@
+# =============================================================================
+# Wi-Fi CSI sensing prototype — configuration
+# =============================================================================
+# One file for everything: python/flash.py turns the "firmware" section into
+# compiler flags, and every Python tool reads the rest. Distances are metres.
+# Use a copy for experiments:  python python/live.py --config config/my.yaml
+
+# ----------------------------------------------------------------- firmware --
+# Changing anything here requires re-flashing ALL boards (python/flash.py).
+firmware:
+  arduino_cli: auto          # path to arduino-cli, or "auto" (PATH + Arduino IDE bundle)
+  fqbn: esp32:esp32:esp32    # classic ESP32 (ESP32-WROOM-32 DevKit)
+
+  wifi:
+    # The TX broadcasts ESP-NOW frames; no access point is involved, so no
+    # SSID/password is needed. (Kept here only so the question is answered.)
+    mode: espnow_broadcast
+    ssid: null
+    password: null
+    channel: 11              # 1..13, identical on TX and RX
+    tx_mac: "1a:00:00:00:00:00"   # spoofed source MAC of the TX (locally administered)
+
+  tx:
+    packets_per_second: 100  # CSI sample rate at each receiver (10..500)
+    payload_bytes: 32        # 12..250
+    phy: ht20                # ht20 (802.11n MCS0) or 11g (6 Mbps). NOT 11b: no CSI!
+    tx_power_qdbm: 0         # 0 = default, else 8..84 (x0.25 dBm)
+    baud: 115200
+
+  rx:
+    baud: 921600             # must match serial.baud below
+    filter_tx_mac: true      # keep only CSI from tx_mac
+    csi_lltf: true           # legacy LTF, 64 subcarriers, every OFDM frame
+    csi_htltf: false         # HT-LTF, +64 subcarriers (needs phy: ht20; doubles serial traffic)
+    csi_stbc_htltf2: false
+    csi_ltf_merge: false
+    csi_channel_filter: false  # hardware smoothing across subcarriers (off = raw)
+
+# ----------------------------------------------------------------- receivers --
+# port: a serial port (Linux /dev/ttyUSB0, /dev/ttyACM0; Windows COM5) or
+#       "auto" = scan all serial ports and recognise the board by the rx_id it
+#       reports (set when flashing) or, failing that, by its MAC address.
+# mac:  optional, the board's factory MAC (printed in its "# BOOT" line).
+# x, y: position in the room, metres (see "room" below).
+receivers:
+  - {id: 1, name: RX1, port: auto, mac: "8c:94:df:aa:53:84", x: 4.5, y: 0.5}
+  - {id: 2, name: RX2, port: auto, mac: "00:70:07:a3:bd:98", x: 4.5, y: 2.0}
+  - {id: 3, name: RX3, port: auto, mac: "8c:94:df:90:86:e0", x: 4.5, y: 3.5}
+
+serial:
+  baud: 921600
+  reconnect_seconds: 2.0     # retry interval after a disconnect
+  identify_seconds: 5.0      # how long an unknown port may take to say who it is
+
+# --------------------------------------------------------------------- room --
+room:
+  width: 5.0                 # x from 0 to width
+  height: 4.0                # y from 0 to height
+  tx: {x: 0.5, y: 2.0}
+
+# --------------------------------------------------------------- recording --
+recording:
+  directory: data/raw        # one sub-folder per session
+  compress: false            # true = csi.csv.gz (≈4x smaller)
+  flush_seconds: 1.0         # how often buffered rows are written to disk
+
+# ----------------------------------------------------------- preprocessing --
+# Each step can be switched off. The raw CSV is never modified by these.
+preprocessing:
+  csi_part: lltf             # lltf or htltf (htltf only if firmware.rx.csi_htltf)
+  drop_null_subcarriers: true    # remove DC/guard subcarriers that carry no signal
+  mask_first_word_invalid: true  # hide subcarriers flagged invalid by the ESP32
+  amplitude_normalization: rssi  # none | mean | rssi   (compensates AGC gain jumps; see README)
+  hampel:                    # outlier removal over time, per subcarrier
+    enabled: true
+    window: 11               # packets
+    n_sigmas: 3.0
+  smoothing:                 # temporal smoothing of amplitude
+    method: ema              # none | ema | moving_average
+    ema_alpha: 0.2           # 0..1, smaller = smoother
+    window: 10               # packets, for moving_average
+  phase_sanitization: linear # none | linear  (unwrap + remove linear phase trend)
+
+# ---------------------------------------------------------------- baseline --
+baseline:
+  duration_seconds: 30       # empty-room recording length
+  min_packets: 200           # per receiver, else the baseline is refused
+  metric: zscore             # zscore | euclidean | correlation (see README)
+  change_smoothing_alpha: 0.3    # EMA on the change value (1 = none)
+  threshold_percentile: 95   # "noise level" = this percentile of the metric while empty
+
+# ------------------------------------------------------------ localization --
+localization:
+  method: link_pattern       # link_pattern (approx. position) or ellipse_weighting (link map only)
+  grid_resolution: 0.05      # metres per heatmap cell
+  ellipse_width: 0.15        # metres of extra path length where a link is "sensitive"
+  activity_floor: 1.0        # change/noise ratio below which a link counts as quiet
+  normalize: true            # true = weighted average of links (keeps the TX area from always glowing)
+  weight_floor: 0.5          # added to the weight sum when normalising
+  # link_pattern (see python/localization/link_pattern.py)
+  pattern_width: 0.5         # metres of extra path length a link is sensitive to
+  pattern_sigma: 0.35        # how strictly the measured pattern must match
+  coverage_power: 0.5        # >0 prefers places links see well (near the TX)
+  presence_threshold: 1.0    # strongest link activity needed to report a position
+
+# ---------------------------------------------------------------- dashboard --
+# python/dashboard.py: one window, TX in the centre of the map.
+dashboard:
+  map_radius: 4.0            # map shows -4..4 m around the TX
+  positions_file: config/positions.yaml   # written by "Save positions"
+  default_rx_distance: 2.5   # metres, used until positions are saved
+  rx_default_angles_deg: [90, 210, 330]   # directions of RX1, RX2, RX3 (0 = right, 90 = up)
+  rssi_at_1m: -45            # dBm at 1 m, for "Auto-place" distance guesses
+  path_loss_exponent: 2.5    # 2 = free space, 2.5-3.5 indoors
+  baseline_start_delay_seconds: 10   # time to leave the room after clicking "Record empty room"
+  position_smoothing_alpha: 0.3      # EMA on the estimated position (1 = none)
+  heat_smoothing_alpha: 0.4          # EMA on the map image
+  trail_seconds: 6                   # length of the drawn path
+  update_interval_ms: 150
+# ----------------------------------------------------------- visualization --
+visualization:
+  update_interval_ms: 150
+  history_seconds: 10        # length of the time plots
+  time_subcarriers: [-21, -7, 7, 21]   # subcarriers shown in "amplitude vs time"
+
+# --------------------------------------------------------------- simulation --
+simulation:
+  packets_per_second: 100
+  empty_seconds: 40          # the room is empty at first (for the baseline demo)
+  walk_speed: 0.6            # m/s
+  packet_loss: 0.02          # fraction of packets dropped at random
+  seed: 1
